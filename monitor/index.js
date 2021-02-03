@@ -1,9 +1,12 @@
 require('dotenv').config()
 const express = require('express')
+const cors = require('cors')
 const { readFile } = require('./utils/file')
 
 const app = express()
 const bridgeRouter = express.Router({ mergeParams: true })
+
+app.use(cors())
 
 app.get('/favicon.ico', (req, res) => res.sendStatus(204))
 app.use('/:bridgeName', bridgeRouter)
@@ -43,6 +46,16 @@ bridgeRouter.get('/alerts', async (req, res, next) => {
     const results = await readFile(`./responses/${req.params.bridgeName}/alerts.json`)
     res.json(results)
   } catch (e) {
+    next(e)
+  }
+})
+
+bridgeRouter.get('/mediators', async (req, res, next) => {
+  try {
+    const results = await readFile(`./responses/${req.params.bridgeName}/mediators.json`)
+    res.json(results)
+  } catch (e) {
+    // this will eventually be handled by your error handling middleware
     next(e)
   }
 })

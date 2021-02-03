@@ -8,7 +8,7 @@ const {
 } = require('../commons')
 const { validator } = require('../e2e-commons/constants')
 
-const waitUntil = async (predicate, step = 100, timeout = 20000) => {
+const waitUntil = async (predicate, step = 100, timeout = 60000) => {
   const stopTime = Date.now() + timeout
   while (Date.now() <= stopTime) {
     const result = await predicate()
@@ -44,12 +44,16 @@ const sendTokens = async (rpcUrl, account, tokenAddress, recipientAddress) => {
   })
 }
 
-const sendAMBMessage = async (rpcUrl, account, boxAddress, bridgeAddress, boxOtherSideAddress) => {
+const sendAMBMessage = async (rpcUrl, account, boxAddress, bridgeAddress, boxOtherSideAddress, manualLane = false) => {
   const web3 = new Web3(new Web3.providers.HttpProvider(rpcUrl))
   web3.eth.accounts.wallet.add(account.privateKey)
   const homeBox = new web3.eth.Contract(BOX_ABI, boxAddress)
 
-  await homeBox.methods.setValueOnOtherNetwork(3, bridgeAddress, boxOtherSideAddress).send({
+  await homeBox.methods[manualLane ? 'setValueOnOtherNetworkUsingManualLane' : 'setValueOnOtherNetwork'](
+    3,
+    bridgeAddress,
+    boxOtherSideAddress
+  ).send({
     from: account.address,
     gas: '400000'
   })

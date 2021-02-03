@@ -1,13 +1,13 @@
 const assert = require('assert')
-const Web3Utils = require('web3-utils')
+const { toHex, numberToHex, padLeft } = require('web3').utils
 const { strip0x } = require('../../../commons')
 
 function createMessage({ recipient, value, transactionHash, bridgeAddress, expectedMessageLength }) {
   recipient = strip0x(recipient)
   assert.strictEqual(recipient.length, 20 * 2)
 
-  value = Web3Utils.numberToHex(value)
-  value = Web3Utils.padLeft(value, 32 * 2)
+  value = numberToHex(value)
+  value = padLeft(value, 32 * 2)
 
   value = strip0x(value)
   assert.strictEqual(value.length, 64)
@@ -60,7 +60,7 @@ function signatureToVRS(rawSignature) {
 }
 
 function packSignatures(array) {
-  const length = strip0x(Web3Utils.toHex(array.length))
+  const length = strip0x(toHex(array.length))
   const msgLength = length.length === 1 ? `0${length}` : length
   let v = ''
   let r = ''
@@ -73,9 +73,37 @@ function packSignatures(array) {
   return `0x${msgLength}${v}${r}${s}`
 }
 
+function parseAMBHeader(message) {
+  message = strip0x(message)
+
+  const messageIdStart = 0
+  const messageIdLength = 32 * 2
+  const messageId = `0x${message.slice(messageIdStart, messageIdStart + messageIdLength)}`
+
+  const senderStart = messageIdStart + messageIdLength
+  const senderLength = 20 * 2
+  const sender = `0x${message.slice(senderStart, senderStart + senderLength)}`
+
+  const executorStart = senderStart + senderLength
+  const executorLength = 20 * 2
+  const executor = `0x${message.slice(executorStart, executorStart + executorLength)}`
+
+  const gasLimitStart = executorStart + executorLength
+  const gasLimitLength = 4 * 2
+  const gasLimit = parseInt(message.slice(gasLimitStart, gasLimitStart + gasLimitLength), 16)
+
+  return {
+    messageId,
+    sender,
+    executor,
+    gasLimit
+  }
+}
+
 module.exports = {
   createMessage,
   parseMessage,
   signatureToVRS,
-  packSignatures
+  packSignatures,
+  parseAMBHeader
 }

@@ -3,11 +3,10 @@ const path = require('path')
 const { isAttached, connectWatcherToQueue, connection } = require('./services/amqpClient')
 const logger = require('./services/logger')
 const GasPrice = require('./services/gasPrice')
-const rpcUrlsManager = require('./services/getRpcUrlsManager')
 const { getNonce, getChainId, getEventsFromTx } = require('./tx/web3')
 const { sendTx } = require('./tx/sendTx')
 const { checkHTTPS, watchdog, syncForEach, addExtraGas } = require('./utils/utils')
-const { EXIT_CODES, EXTRA_GAS_PERCENTAGE } = require('./utils/constants')
+const { EXIT_CODES, EXTRA_GAS_PERCENTAGE, MAX_GAS_LIMIT } = require('./utils/constants')
 
 const { ORACLE_VALIDATOR_ADDRESS, ORACLE_VALIDATOR_ADDRESS_PRIVATE_KEY, ORACLE_ALLOW_HTTP_FOR_RPC } = process.env
 
@@ -37,8 +36,7 @@ async function initialize() {
   try {
     const checkHttps = checkHTTPS(ORACLE_ALLOW_HTTP_FOR_RPC, logger)
 
-    rpcUrlsManager.homeUrls.forEach(checkHttps('home'))
-    rpcUrlsManager.foreignUrls.forEach(checkHttps('foreign'))
+    web3Instance.currentProvider.urls.forEach(checkHttps(config.chain))
 
     attached = await isAttached()
     if (attached) {
@@ -138,17 +136,21 @@ async function main({ sendJob, txHash }) {
 }
 
 async function sendJobTx(jobs) {
-  const gasPrice = await GasPrice.start(config.queue, true)
-  const chainId = await getChainId(config.queue)
+  const gasPrice = await GasPrice.start(config.chain, true)
+  const chainId = await getChainId(web3Instance)
   let nonce = await getNonce(web3Instance, ORACLE_VALIDATOR_ADDRESS)
 
   await syncForEach(jobs, async job => {
-    const gasLimit = addExtraGas(job.gasEstimate, EXTRA_GAS_PERCENTAGE)
+    let gasLimit
+    if (typeof job.extraGas === 'number') {
+      gasLimit = addExtraGas(job.gasEstimate + job.extraGas, 0, MAX_GAS_LIMIT)
+    } else {
+      gasLimit = addExtraGas(job.gasEstimate, EXTRA_GAS_PERCENTAGE, MAX_GAS_LIMIT)
+    }
 
     try {
       logger.info(`Sending transaction with nonce ${nonce}`)
       const txHash = await sendTx({
-        chain: config.queue,
         data: job.data,
         nonce,
         gasPrice: gasPrice.toString(10),
@@ -172,7 +174,7 @@ async function sendJobTx(jobs) {
         e.message
       )
 
-      if (e.message.includes('Insufficient funds')) {
+      if (e.message.toLowerCase().includes('insufficient funds')) {
         const currentBalance = await web3Instance.eth.getBalance(ORACLE_VALIDATOR_ADDRESS)
         const minimumBalance = gasLimit.multipliedBy(gasPrice)
         logger.error(

@@ -4,30 +4,42 @@ set -e # exit when any command fails
 
 ./down.sh
 docker-compose build parity1 parity2
-test -n "$NODOCKERPULL" || ./pull.sh $@
+
+if [ -z "$CI" ]; then
+  ./build.sh $@
+else
+  ./pull.sh $@
+fi
+
 docker network create --driver bridge ultimate || true
 docker-compose up -d parity1 parity2 e2e
 
 startValidator () {
     docker-compose $1 run -d --name $4 redis
     docker-compose $1 run -d --name $5 rabbit
-    docker-compose $1 run $2 $3 -d oracle yarn watcher:signature-request
-    docker-compose $1 run $2 $3 -d oracle yarn watcher:collected-signatures
-    docker-compose $1 run $2 $3 -d oracle yarn watcher:affirmation-request
-    docker-compose $1 run $2 $3 -d oracle-erc20 yarn watcher:signature-request
-    docker-compose $1 run $2 $3 -d oracle-erc20 yarn watcher:collected-signatures
-    docker-compose $1 run $2 $3 -d oracle-erc20 yarn watcher:affirmation-request
-    docker-compose $1 run $2 $3 -d oracle-erc20 yarn watcher:transfer
-    docker-compose $1 run $2 $3 -d oracle-erc20-native yarn watcher:signature-request
-    docker-compose $1 run $2 $3 -d oracle-erc20-native yarn watcher:collected-signatures
-    docker-compose $1 run $2 $3 -d oracle-erc20-native yarn watcher:affirmation-request
-    docker-compose $1 run $2 $3 -d oracle-erc20-native yarn watcher:transfer
-    docker-compose $1 run $2 $3 -d oracle-erc20-native yarn watcher:half-duplex-transfer
-    docker-compose $1 run $2 $3 -d oracle-erc20-native yarn worker:swap-tokens
-    docker-compose $1 run $2 $3 -d oracle-erc20-native yarn worker:convert-to-chai
-    docker-compose $1 run $2 $3 -d oracle-amb yarn watcher:signature-request
-    docker-compose $1 run $2 $3 -d oracle-amb yarn watcher:collected-signatures
-    docker-compose $1 run $2 $3 -d oracle-amb yarn watcher:affirmation-request
+    if [[ -z "$MODE" || "$MODE" == native-to-erc ]]; then
+      docker-compose $1 run $2 $3 -d oracle yarn watcher:signature-request
+      docker-compose $1 run $2 $3 -d oracle yarn watcher:collected-signatures
+      docker-compose $1 run $2 $3 -d oracle yarn watcher:affirmation-request
+    fi
+    if [[ -z "$MODE" || "$MODE" == erc-to-erc ]]; then
+      docker-compose $1 run $2 $3 -d oracle-erc20 yarn watcher:signature-request
+      docker-compose $1 run $2 $3 -d oracle-erc20 yarn watcher:collected-signatures
+      docker-compose $1 run $2 $3 -d oracle-erc20 yarn watcher:affirmation-request
+      docker-compose $1 run $2 $3 -d oracle-erc20 yarn watcher:transfer
+    fi
+    if [[ -z "$MODE" || "$MODE" == erc-to-native ]]; then
+      docker-compose $1 run $2 $3 -d oracle-erc20-native yarn watcher:signature-request
+      docker-compose $1 run $2 $3 -d oracle-erc20-native yarn watcher:collected-signatures
+      docker-compose $1 run $2 $3 -d oracle-erc20-native yarn watcher:affirmation-request
+      docker-compose $1 run $2 $3 -d oracle-erc20-native yarn watcher:transfer
+      docker-compose $1 run $2 $3 -d oracle-erc20-native yarn worker:convert-to-chai
+    fi
+    if [[ -z "$MODE" || "$MODE" == amb ]]; then
+      docker-compose $1 run $2 $3 -d oracle-amb yarn watcher:signature-request
+      docker-compose $1 run $2 $3 -d oracle-amb yarn watcher:collected-signatures
+      docker-compose $1 run $2 $3 -d oracle-amb yarn watcher:affirmation-request
+    fi
     docker-compose $1 run $2 $3 -d oracle-erc20-native yarn sender:home
     docker-compose $1 run $2 $3 -d oracle-erc20-native yarn sender:foreign
 }
@@ -44,27 +56,7 @@ startAMBValidator () {
 
 while [ "$1" != "" ]; do
   if [ "$1" == "oracle" ]; then
-    docker-compose up -d redis rabbit
-
-    docker-compose run -d oracle yarn watcher:signature-request
-    docker-compose run -d oracle yarn watcher:collected-signatures
-    docker-compose run -d oracle yarn watcher:affirmation-request
-    docker-compose run -d oracle-erc20 yarn watcher:signature-request
-    docker-compose run -d oracle-erc20 yarn watcher:collected-signatures
-    docker-compose run -d oracle-erc20 yarn watcher:affirmation-request
-    docker-compose run -d oracle-erc20 yarn watcher:transfer
-    docker-compose run -d oracle-erc20-native yarn watcher:signature-request
-    docker-compose run -d oracle-erc20-native yarn watcher:collected-signatures
-    docker-compose run -d oracle-erc20-native yarn watcher:affirmation-request
-    docker-compose run -d oracle-erc20-native yarn watcher:transfer
-    docker-compose run -d oracle-erc20-native yarn watcher:half-duplex-transfer
-    docker-compose run -d oracle-erc20-native yarn worker:swap-tokens
-    docker-compose run -d oracle-erc20-native yarn worker:convert-to-chai
-    docker-compose run -d oracle-amb yarn watcher:signature-request
-    docker-compose run -d oracle-amb yarn watcher:collected-signatures
-    docker-compose run -d oracle-amb yarn watcher:affirmation-request
-    docker-compose run -d oracle yarn sender:home
-    docker-compose run -d oracle yarn sender:foreign
+    startValidator "" "" "" "redis" "rabbit"
   fi
 
   if [ "$1" == "oracle-validator-2" ]; then
@@ -88,9 +80,9 @@ while [ "$1" != "" ]; do
     docker-compose up -d ui ui-erc20 ui-erc20-native ui-amb-stake-erc20-erc20
 
     docker-compose run -d -p 3000:3000 ui yarn start
-    docker-compose run -d -p 3001:3000 ui-erc20 yarn start
-    docker-compose run -d -p 3002:3000 ui-erc20-native yarn start
-    docker-compose run -d -p 3003:3000 ui-amb-stake-erc20-erc20 yarn start
+    docker-compose run -d -p 3001:3001 ui-erc20 yarn start
+    docker-compose run -d -p 3002:3002 ui-erc20-native yarn start
+    docker-compose run -d -p 3003:3003 ui-amb-stake-erc20-erc20 yarn start
   fi
 
   if [ "$1" == "alm" ]; then
@@ -108,27 +100,23 @@ while [ "$1" != "" ]; do
   fi
 
   if [ "$1" == "monitor" ]; then
-    docker-compose up -d monitor monitor-erc20 monitor-erc20-native monitor-amb
-  fi
-
-  if [ "$1" == "native-to-erc" ]; then
-    ../deployment-e2e/molecule.sh ultimate-native-to-erc
-  fi
-
-  if [ "$1" == "erc-to-native" ]; then
-    ../deployment-e2e/molecule.sh ultimate-erc-to-native
-  fi
-
-  if [ "$1" == "erc-to-erc" ]; then
-    ../deployment-e2e/molecule.sh ultimate-erc-to-erc
-  fi
-
-  if [ "$1" == "amb" ]; then
-    ../deployment-e2e/molecule.sh ultimate-amb
-  fi
-
-  if [ "$1" == "ultimate-amb-stake-erc-to-erc" ]; then
-    ../deployment-e2e/molecule.sh ultimate-amb-stake-erc-to-erc
+    case "$MODE" in
+      amb)
+        docker-compose up -d monitor-amb
+        ;;
+      native-to-erc)
+        docker-compose up -d monitor
+        ;;
+      erc-to-erc)
+        docker-compose up -d monitor-erc20
+        ;;
+      erc-to-native)
+        docker-compose up -d monitor-erc20-native
+        ;;
+      *)
+        docker-compose up -d monitor monitor-erc20 monitor-erc20-native monitor-amb
+        ;;
+    esac
   fi
 
   if [ "$1" == "alm-e2e" ]; then

@@ -1,6 +1,9 @@
 const { toWei, toBN } = require('web3-utils')
+const { GasPriceOracle } = require('gas-price-oracle')
 const { BRIDGE_MODES, FEE_MANAGER_MODE, ERC_TYPES } = require('./constants')
 const { REWARDABLE_VALIDATORS_ABI } = require('./abis')
+
+const gasPriceOracle = new GasPriceOracle()
 
 function decodeBridgeMode(bridgeModeHash) {
   switch (bridgeModeHash) {
@@ -161,18 +164,18 @@ const getPastEvents = async (
   } catch (e) {
     if (e.message.includes('query returned more than') && toBlock !== 'latest') {
       const middle = toBN(fromBlock)
-        .add(toBlock)
+        .add(toBN(toBlock))
         .divRound(toBN(2))
       const middlePlusOne = middle.add(toBN(1))
 
       const firstHalfEvents = await getPastEvents(contract, {
-        ...options,
+        options,
         event,
         fromBlock,
         toBlock: middle
       })
       const secondHalfEvents = await getPastEvents(contract, {
-        ...options,
+        options,
         event,
         fromBlock: middlePlusOne,
         toBlock
@@ -235,8 +238,13 @@ const normalizeGasPrice = (oracleGasPrice, factor, limits = null) => {
 // we use built-in 'fetch' on browser side, and `node-fetch` package in Node.
 const gasPriceFromSupplier = async (fetchFn, options = {}) => {
   try {
-    const response = await fetchFn()
-    const json = await response.json()
+    let json
+    if (fetchFn) {
+      const response = await fetchFn()
+      json = await response.json()
+    } else {
+      json = await gasPriceOracle.fetchGasPricesOffChain()
+    }
     const oracleGasPrice = json[options.speedType]
 
     if (!oracleGasPrice) {

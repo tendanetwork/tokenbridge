@@ -1,16 +1,23 @@
 require('dotenv').config()
 const promiseLimit = require('promise-limit')
-const { HttpListProviderError } = require('http-list-provider')
+const { HttpListProviderError } = require('../../services/HttpListProvider')
 const bridgeValidatorsABI = require('../../../../contracts/build/contracts/BridgeValidators').abi
 const rootLogger = require('../../services/logger')
 const { web3Home, web3Foreign } = require('../../services/web3')
 const { signatureToVRS, packSignatures } = require('../../utils/message')
+const { readAccessListFile } = require('../../utils/utils')
 const { parseAMBMessage } = require('../../../../commons')
 const estimateGas = require('./estimateGas')
 const { AlreadyProcessedError, IncompatibleContractError, InvalidValidatorError } = require('../../utils/errors')
-const { MAX_CONCURRENT_EVENTS } = require('../../utils/constants')
+const { MAX_CONCURRENT_EVENTS, EXTRA_GAS_ABSOLUTE } = require('../../utils/constants')
 
 const limit = promiseLimit(MAX_CONCURRENT_EVENTS)
+
+const {
+  ORACLE_HOME_TO_FOREIGN_ALLOWANCE_LIST,
+  ORACLE_HOME_TO_FOREIGN_BLOCK_LIST,
+  ORACLE_ALWAYS_RELAY_SIGNATURES
+} = process.env
 
 let validatorContract = null
 
@@ -39,13 +46,50 @@ function processCollectedSignaturesBuilder(config) {
           eventTransactionHash: colSignature.transactionHash
         })
 
-        if (authorityResponsibleForRelay !== web3Home.utils.toChecksumAddress(config.validatorAddress)) {
+        if (ORACLE_ALWAYS_RELAY_SIGNATURES && ORACLE_ALWAYS_RELAY_SIGNATURES === 'true') {
+          logger.debug('Validator handles all CollectedSignature requests')
+        } else if (authorityResponsibleForRelay !== web3Home.utils.toChecksumAddress(config.validatorAddress)) {
           logger.info(`Validator not responsible for relaying CollectedSignatures ${colSignature.transactionHash}`)
           return
         }
 
         logger.info(`Processing CollectedSignatures ${colSignature.transactionHash}`)
         const message = await homeBridge.methods.message(messageHash).call()
+        const parsedMessage = parseAMBMessage(message)
+
+        if (ORACLE_HOME_TO_FOREIGN_ALLOWANCE_LIST || ORACLE_HOME_TO_FOREIGN_BLOCK_LIST) {
+          const sender = parsedMessage.sender.toLowerCase()
+          const executor = parsedMessage.executor.toLowerCase()
+
+          if (ORACLE_HOME_TO_FOREIGN_ALLOWANCE_LIST) {
+            const allowanceList = await readAccessListFile(ORACLE_HOME_TO_FOREIGN_ALLOWANCE_LIST, logger)
+            if (!allowanceList.includes(executor) && !allowanceList.includes(sender)) {
+              logger.info(
+                { sender, executor },
+                'Validator skips a message. Neither sender nor executor addresses are in the allowance list.'
+              )
+              return
+            }
+          } else if (ORACLE_HOME_TO_FOREIGN_BLOCK_LIST) {
+            const blockList = await readAccessListFile(ORACLE_HOME_TO_FOREIGN_BLOCK_LIST, logger)
+            if (blockList.includes(executor)) {
+              logger.info({ executor }, 'Validator skips a message. Executor address is in the block list.')
+              return
+            }
+            if (blockList.includes(sender)) {
+              logger.info({ sender }, 'Validator skips a message. Sender address is in the block list.')
+              return
+            }
+          }
+        }
+
+        if (parsedMessage.decodedDataType.manualLane) {
+          logger.info(
+            { dataType: parsedMessage.dataType },
+            'Validator skips a message. Message was forwarded to the manual lane by the extension'
+          )
+          return
+        }
 
         logger.debug({ NumberOfCollectedSignatures }, 'Number of signatures to get')
 
@@ -107,6 +151,7 @@ function processCollectedSignaturesBuilder(config) {
         txToSend.push({
           data,
           gasEstimate,
+          extraGas: EXTRA_GAS_ABSOLUTE,
           transactionReference: colSignature.transactionHash,
           to: config.foreignBridgeAddress
         })

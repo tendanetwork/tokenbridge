@@ -1,44 +1,31 @@
-const web3Utils = require('web3').utils
-const { parseAMBMessage } = require('../../commons')
+const { normalizeAMBMessageEvent } = require('../../commons')
+const { readAccessListFile } = require('./file')
+
+const { MONITOR_HOME_TO_FOREIGN_ALLOWANCE_LIST, MONITOR_HOME_TO_FOREIGN_BLOCK_LIST } = process.env
+
+const keyAMB = e => [e.messageId, e.sender, e.executor].join(',').toLowerCase()
 
 function deliveredMsgNotProcessed(processedList) {
-  return deliveredMsg => {
-    let msgData = deliveredMsg.returnValues.encodedData
-    if (!deliveredMsg.returnValues.messageId) {
-      // append tx hash to an old message, where message id was not used
-      msgData = deliveredMsg.transactionHash + msgData.slice(2)
-    }
-    const msg = parseAMBMessage(msgData)
-    return (
-      processedList.filter(processedMsg => {
-        return messageEqualsEvent(msg, processedMsg.returnValues)
-      }).length === 0
-    )
-  }
+  const keys = new Set()
+  processedList.forEach(processedMsg => keys.add(keyAMB(processedMsg.returnValues)))
+  return deliveredMsg => !keys.has(keyAMB(normalizeAMBMessageEvent(deliveredMsg)))
 }
 
 function processedMsgNotDelivered(deliveredList) {
-  return processedMsg => {
-    return (
-      deliveredList.filter(deliveredMsg => {
-        let msgData = deliveredMsg.returnValues.encodedData
-        if (!deliveredMsg.returnValues.messageId) {
-          // append tx hash to an old message, where message id was not used
-          msgData = deliveredMsg.transactionHash + msgData.slice(2)
-        }
-        const msg = parseAMBMessage(msgData)
-        return messageEqualsEvent(msg, processedMsg.returnValues)
-      }).length === 0
-    )
-  }
+  const keys = new Set()
+  deliveredList.forEach(deliveredMsg => keys.add(keyAMB(normalizeAMBMessageEvent(deliveredMsg))))
+  return processedMsg => !keys.has(keyAMB(processedMsg.returnValues))
 }
 
-function messageEqualsEvent(parsedMsg, event) {
-  return (
-    web3Utils.toChecksumAddress(parsedMsg.sender) === event.sender &&
-    web3Utils.toChecksumAddress(parsedMsg.executor) === event.executor &&
-    parsedMsg.messageId === event.messageId // for an old messages, event.messageId is actually a transactionHash
-  )
+function addExecutionStatus(processedList) {
+  const statuses = {}
+  processedList.forEach(processedMsg => {
+    statuses[keyAMB(processedMsg.returnValues)] = processedMsg.returnValues.status
+  })
+  return deliveredMsg => {
+    deliveredMsg.status = statuses[keyAMB(deliveredMsg)]
+    return deliveredMsg
+  }
 }
 
 /**
@@ -60,13 +47,50 @@ const normalizeEventInformation = event => ({
   value: event.returnValues.value
 })
 
-const eventWithoutReference = otherSideEvents => e =>
-  otherSideEvents.filter(a => a.referenceTx === e.referenceTx && a.recipient === e.recipient && a.value === e.value)
-    .length === 0
+const key = e => [e.referenceTx, e.recipient, e.value].join(',').toLowerCase()
+
+const eventWithoutReference = otherSideEvents => {
+  const keys = new Set()
+  otherSideEvents.forEach(e => keys.add(key(e)))
+  return e => !keys.has(key(e))
+}
+
+const unclaimedHomeToForeignRequests = () => {
+  if (MONITOR_HOME_TO_FOREIGN_ALLOWANCE_LIST) {
+    const allowanceList = readAccessListFile(MONITOR_HOME_TO_FOREIGN_ALLOWANCE_LIST)
+    return e => !allowanceList.includes(e.recipient.toLowerCase()) && !(e.sender && allowanceList.includes(e.sender))
+  } else if (MONITOR_HOME_TO_FOREIGN_BLOCK_LIST) {
+    const blockList = readAccessListFile(MONITOR_HOME_TO_FOREIGN_BLOCK_LIST)
+    return e => blockList.includes(e.recipient.toLowerCase()) || (e.sender && blockList.includes(e.sender))
+  } else {
+    return () => false
+  }
+}
+
+const manuallyProcessedAMBHomeToForeignRequests = () => {
+  if (MONITOR_HOME_TO_FOREIGN_ALLOWANCE_LIST) {
+    const allowanceList = readAccessListFile(MONITOR_HOME_TO_FOREIGN_ALLOWANCE_LIST)
+    return e => {
+      const { sender, executor, decodedDataType } = normalizeAMBMessageEvent(e)
+      return (!allowanceList.includes(sender) && !allowanceList.includes(executor)) || decodedDataType.manualLane
+    }
+  } else if (MONITOR_HOME_TO_FOREIGN_BLOCK_LIST) {
+    const blockList = readAccessListFile(MONITOR_HOME_TO_FOREIGN_BLOCK_LIST)
+    return e => {
+      const { sender, executor, decodedDataType } = normalizeAMBMessageEvent(e)
+      return blockList.includes(sender) || blockList.includes(executor) || decodedDataType.manualLane
+    }
+  } else {
+    return e => normalizeAMBMessageEvent(e).decodedDataType.manualLane
+  }
+}
 
 module.exports = {
   deliveredMsgNotProcessed,
   processedMsgNotDelivered,
+  addExecutionStatus,
   normalizeEventInformation,
-  eventWithoutReference
+  eventWithoutReference,
+  unclaimedHomeToForeignRequests,
+  manuallyProcessedAMBHomeToForeignRequests
 }

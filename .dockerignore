@@ -8,9 +8,17 @@
 **/docs
 **/*.md
 
+monitor/**/*.env*
+oracle/**/*.env*
+!**/.env.example
+
 contracts/test
 contracts/build
 oracle/test
+monitor/test
+monitor/responses
+monitor/cache/*
+commons/test
 oracle/**/*.png
 oracle/**/*.jpg
 audit
